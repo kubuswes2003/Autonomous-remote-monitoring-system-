@@ -1,0 +1,30 @@
+# Docker volumes & data
+mosquitto/data/
+mosquitto/log/
+influxdb-data/
+grafana-data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.Python
+venv/
+env/
+
+# Backup files
+*.backup
+*.bak
+*.old
+*.broken
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

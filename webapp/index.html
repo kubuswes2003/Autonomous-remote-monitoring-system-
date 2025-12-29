@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Autonomous Remote Monitoring System</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f7fafc;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .header h1 {
+            font-size: 1.5em;
+            font-weight: 600;
+        }
+        
+        .header-controls {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+        
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(255,255,255,0.2);
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+        }
+        
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #48bb78;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .status-dot.disconnected {
+            background: #f56565;
+            animation: none;
+        }
+        
+        /* Main Container */
+        .main-container {
+            display: flex;
+            height: calc(100vh - 60px);
+        }
+        
+        /* Map Panel */
+        .map-panel {
+            flex: 70%;
+            position: relative;
+        }
+        
+        #map {
+            width: 100%;
+            height: 100%;
+        }
+        
+        /* Data Panel */
+        .data-panel {
+            flex: 30%;
+            background: white;
+            border-left: 1px solid #e2e8f0;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        
+        /* Station Selector */
+        .station-selector {
+            padding: 20px;
+            border-bottom: 2px solid #e2e8f0;
+            background: #f7fafc;
+        }
+        
+        .station-selector select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 1em;
+            background: white;
+            cursor: pointer;
+            transition: border-color 0.3s;
+        }
+        
+        .station-selector select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        /* Tabs */
+        .tabs {
+            display: flex;
+            border-bottom: 2px solid #e2e8f0;
+            background: #f7fafc;
+        }
+        
+        .tab {
+            flex: 1;
+            padding: 15px;
+            text-align: center;
+            cursor: pointer;
+            border: none;
+            background: none;
+            font-size: 0.95em;
+            color: #718096;
+            transition: all 0.3s;
+            position: relative;
+        }
+        
+        .tab:hover {
+            background: #edf2f7;
+            color: #667eea;
+        }
+        
+        .tab.active {
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        .tab.active::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: #667eea;
+        }
+        
+        /* Tab Content */
+        .tab-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+        
+        .tab-pane {
+            display: none;
+        }
+        
+        .tab-pane.active {
+            display: block;
+        }
+        
+        /* Parameter Cards (NO SPARKLINES) */
+        .parameter-card {
+            background: white;
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 15px;
+            transition: all 0.3s;
+        }
+        
+        .parameter-card:hover {
+            border-color: #667eea;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.1);
+        }
+        
+        .parameter-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .parameter-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #718096;
+            font-size: 0.9em;
+        }
+        
+        .parameter-icon {
+            font-size: 1.5em;
+        }
+        
+        .parameter-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #2d3748;
+            margin-bottom: 10px;
+        }
+        
+        .parameter-time {
+            font-size: 0.85em;
+            color: #a0aec0;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .freshness-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #48bb78;
+        }
+        
+        .freshness-indicator.stale {
+            background: #f6ad55;
+        }
+        
+        .freshness-indicator.offline {
+            background: #f56565;
+        }
+        
+        /* System Info */
+        .system-info {
+            background: #f7fafc;
+            border-radius: 12px;
+            padding: 15px;
+            margin-top: 20px;
+        }
+        
+        .system-info h3 {
+            font-size: 1em;
+            color: #2d3748;
+            margin-bottom: 15px;
+        }
+        
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        
+        .info-row:last-child {
+            border-bottom: none;
+        }
+        
+        .info-label {
+            color: #718096;
+            font-size: 0.9em;
+        }
+        
+        .info-value {
+            color: #2d3748;
+            font-weight: 600;
+            font-size: 0.9em;
+        }
+        
+        /* Chart Container */
+        .chart-container {
+            background: white;
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        
+        .chart-title {
+            font-size: 1.2em;
+            color: #2d3748;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 600;
+        }
+        
+        /* Time Range Dropdown (like Grafana) */
+        .time-range-dropdown {
+            position: relative;
+            display: inline-block;
+        }
+        
+        .time-range-button {
+            padding: 8px 16px;
+            border: 2px solid #e2e8f0;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+            font-size: 0.9em;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 150px;
+            transition: all 0.3s;
+        }
+        
+        .time-range-button:hover {
+            border-color: #667eea;
+            background: #f7fafc;
+        }
+        
+        .time-range-button::after {
+            content: '▼';
+            font-size: 0.7em;
+            margin-left: auto;
+        }
+        
+        .time-range-menu {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            margin-top: 5px;
+            background: white;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            min-width: 180px;
+            display: none;
+            z-index: 100;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .time-range-menu.active {
+            display: block;
+        }
+        
+        .time-range-option {
+            padding: 10px 16px;
+            cursor: pointer;
+            transition: background 0.2s;
+            font-size: 0.9em;
+        }
+        
+        .time-range-option:hover {
+            background: #f7fafc;
+        }
+        
+        .time-range-option.selected {
+            background: #667eea;
+            color: white;
+            font-weight: 600;
+        }
+        
+        .chart-canvas-wrapper {
+            height: 300px;
+            position: relative;
+        }
+        
+        /* Welcome State */
+        .welcome-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: #718096;
+        }
+        
+        .welcome-state-icon {
+            font-size: 4em;
+            margin-bottom: 20px;
+            opacity: 0.5;
+        }
+        
+        .welcome-state h2 {
+            font-size: 1.3em;
+            color: #2d3748;
+            margin-bottom: 10px;
+        }
+        
+        /* Loading */
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #718096;
+        }
+        
+        .spinner {
+            border: 3px solid #e2e8f0;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <h1>🌤️ Autonomous Remote Monitoring System</h1>
+        <div class="header-controls">
+            <div class="status-indicator">
+                <div class="status-dot" id="mqtt-status"></div>
+                <span id="mqtt-status-text">Łączenie...</span>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Main Container -->
+    <div class="main-container">
+        <!-- Map Panel -->
+        <div class="map-panel">
+            <div id="map"></div>
+        </div>
+        
+        <!-- Data Panel -->
+        <div class="data-panel">
+            <!-- Station Selector -->
+            <div class="station-selector">
+                <select id="station-select">
+                    <option value="">Wybierz stację...</option>
+                    <option value="WEATHER_STATION_01">Station 01 - Strzeszyn</option>
+                </select>
+            </div>
+            
+            <!-- Tabs -->
+            <div class="tabs">
+                <button class="tab active" data-tab="current">Aktualnie</button>
+                <button class="tab" data-tab="charts">Wykresy</button>
+            </div>
+            
+            <!-- Tab Content -->
+            <div class="tab-content">
+                <!-- Welcome State -->
+                <div id="welcome-pane" class="tab-pane">
+                    <div class="welcome-state">
+                        <div class="welcome-state-icon">📍</div>
+                        <h2>Wybierz stację na mapie</h2>
+                        <p>Kliknij pineczkę lub wybierz z listy powyżej</p>
+                    </div>
+                </div>
+                
+                <!-- Current Tab (NO SPARKLINES) -->
+                <div id="current-pane" class="tab-pane">
+                    <div class="loading" id="loading-current">
+                        <div class="spinner"></div>
+                        <p>Ładowanie danych...</p>
+                    </div>
+                    <div id="current-data" style="display: none;"></div>
+                </div>
+                
+                <!-- Charts Tab (4 SEPARATE CHARTS) -->
+                <div id="charts-pane" class="tab-pane">
+                    <!-- Temperature Chart -->
+                    <div class="chart-container">
+                        <div class="chart-header">
+                            <div class="chart-title">
+                                <span>🌡️</span>
+                                <span>Temperatura</span>
+                            </div>
+                            <div class="time-range-dropdown">
+                                <button class="time-range-button" data-chart="temp">
+                                    Last 3 hours
+                                </button>
+                                <div class="time-range-menu" data-chart="temp">
+                                    <div class="time-range-option" data-range="1">Last 1 hour</div>
+                                    <div class="time-range-option selected" data-range="3">Last 3 hours</div>
+                                    <div class="time-range-option" data-range="6">Last 6 hours</div>
+                                    <div class="time-range-option" data-range="12">Last 12 hours</div>
+                                    <div class="time-range-option" data-range="24">Last 24 hours</div>
+                                    <div class="time-range-option" data-range="48">Last 2 days</div>
+                                    <div class="time-range-option" data-range="168">Last 7 days</div>
+                                    <div class="time-range-option" data-range="720">Last 30 days</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="chart-canvas-wrapper">
+                            <canvas id="tempChart"></canvas>
+                        </div>
+                    </div>
+                    
+                    <!-- Humidity Chart -->
+                    <div class="chart-container">
+                        <div class="chart-header">
+                            <div class="chart-title">
+                                <span>💧</span>
+                                <span>Wilgotność</span>
+                            </div>
+                            <div class="time-range-dropdown">
+                                <button class="time-range-button" data-chart="humidity">
+                                    Last 24 hours
+                                </button>
+                                <div class="time-range-menu" data-chart="humidity">
+                                    <div class="time-range-option" data-range="1">Last 1 hour</div>
+                                    <div class="time-range-option" data-range="3">Last 3 hours</div>
+                                    <div class="time-range-option" data-range="6">Last 6 hours</div>
+                                    <div class="time-range-option" data-range="12">Last 12 hours</div>
+                                    <div class="time-range-option selected" data-range="24">Last 24 hours</div>
+                                    <div class="time-range-option" data-range="48">Last 2 days</div>
+                                    <div class="time-range-option" data-range="168">Last 7 days</div>
+                                    <div class="time-range-option" data-range="720">Last 30 days</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="chart-canvas-wrapper">
+                            <canvas id="humidityChart"></canvas>
+                        </div>
+                    </div>
+                    
+                    <!-- Pressure Chart -->
+                    <div class="chart-container">
+                        <div class="chart-header">
+                            <div class="chart-title">
+                                <span>⏲️</span>
+                                <span>Ciśnienie</span>
+                            </div>
+                            <div class="time-range-dropdown">
+                                <button class="time-range-button" data-chart="pressure">
+                                    Last 6 hours
+                                </button>
+                                <div class="time-range-menu" data-chart="pressure">
+                                    <div class="time-range-option" data-range="1">Last 1 hour</div>
+                                    <div class="time-range-option" data-range="3">Last 3 hours</div>
+                                    <div class="time-range-option selected" data-range="6">Last 6 hours</div>
+                                    <div class="time-range-option" data-range="12">Last 12 hours</div>
+                                    <div class="time-range-option" data-range="24">Last 24 hours</div>
+                                    <div class="time-range-option" data-range="48">Last 2 days</div>
+                                    <div class="time-range-option" data-range="168">Last 7 days</div>
+                                    <div class="time-range-option" data-range="720">Last 30 days</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="chart-canvas-wrapper">
+                            <canvas id="pressureChart"></canvas>
+                        </div>
+                    </div>
+                    
+                    <!-- Wind Chart -->
+                    <div class="chart-container">
+                        <div class="chart-header">
+                            <div class="chart-title">
+                                <span>💨</span>
+                                <span>Wiatr</span>
+                            </div>
+                            <div class="time-range-dropdown">
+                                <button class="time-range-button" data-chart="wind">
+                                    Last 12 hours
+                                </button>
+                                <div class="time-range-menu" data-chart="wind">
+                                    <div class="time-range-option" data-range="1">Last 1 hour</div>
+                                    <div class="time-range-option" data-range="3">Last 3 hours</div>
+                                    <div class="time-range-option" data-range="6">Last 6 hours</div>
+                                    <div class="time-range-option selected" data-range="12">Last 12 hours</div>
+                                    <div class="time-range-option" data-range="24">Last 24 hours</div>
+                                    <div class="time-range-option" data-range="48">Last 2 days</div>
+                                    <div class="time-range-option" data-range="168">Last 7 days</div>
+                                    <div class="time-range-option" data-range="720">Last 30 days</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="chart-canvas-wrapper">
+                            <canvas id="windChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <!-- MQTT JS -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    
+    <script src="app.js"></script>
+</body>
+</html>
