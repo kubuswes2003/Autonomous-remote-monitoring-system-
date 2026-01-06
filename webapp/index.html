@@ -448,6 +448,8 @@
                 <select id="station-select">
                     <option value="">Wybierz stację...</option>
                     <option value="WEATHER_STATION_01">Station 01 - Strzeszyn</option>
+                    <option value="WEATHER_STATION_02">Station 02 - Winogrady</option>
+                    <option value="WEATHER_STATION_03">Station 03 - Rataje</option>
                 </select>
             </div>
             
@@ -601,6 +603,7 @@
     <!-- MQTT JS -->
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     
-    <script src="app.js"></script>
+    <!-- Cache busting -->
+    <script src="app.js?v=6"></script>
 </body>
 </html>

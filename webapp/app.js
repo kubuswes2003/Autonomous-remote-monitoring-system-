@@ -1,4 +1,4 @@
-// Konfiguracja stacji
+	// Konfiguracja stacji
 const stations = [
     {
         id: "WEATHER_STATION_01",
@@ -6,7 +6,29 @@ const stations = [
         lat: 52.443196,
         lng: 16.879174,
         location: "Strzeszyn, Poznań"
-    }
+    },
+    {
+        id: "WEATHER_STATION_02",
+        name: "Station 02 - Winogrady",
+        lat: 52.433196,
+        lng: 16.889174,
+        location: "Winogrady, Poznań"
+    },
+    {
+        id: "WEATHER_STATION_03",
+        name: "Station 03 - Rataje",
+        lat: 52.423196,
+        lng: 16.949174,
+        location: "Rataje, Poznań"
+    },
+    {
+        id: "LORA_STATION",
+        name: "Stacja LoRa",
+        lat: 52.4310,
+        lng: 16.8114,
+       	location: "Poznań - Gateway LoRaWAN",
+        color: "#9C27B0"  
+   	}
 ];
 
 // Konfiguracja InfluxDB
@@ -41,34 +63,58 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ========== MAPA ==========
 function initMap() {
-    map = L.map('map').setView([52.443196, 16.879174], 13);
+    console.log('🗺️ Inicjalizacja mapy...');
+    
+    // Inicjalizuj mapę
+    map = L.map('map').setView([52.4064, 16.9252], 12);
     
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '© OpenStreetMap contributors',
         maxZoom: 18
     }).addTo(map);
     
-    stations.forEach(station => {
-        addStationMarker(station);
+    // Wyczyść stare markery
+    markers = {};
+    
+    // Debug
+    console.log(`📍 Liczba stacji: ${stations.length}`);
+    
+    // Dodaj wszystkie stacje
+    stations.forEach((station, index) => {
+        console.log(`  ${index + 1}. ${station.id} → [${station.lat}, ${station.lng}]`);
+        
+        const marker = L.marker([station.lat, station.lng])
+            .bindPopup(`
+                <div style="min-width: 200px;">
+                    <h3>${station.name}</h3>
+                    <p><strong>ID:</strong> ${station.id}</p>
+                    <p><strong>Lokalizacja:</strong> ${station.location}</p>
+                    <button onclick="selectStation('${station.id}')" style="
+                        padding: 8px 16px;
+                        background: #4CAF50;
+                        color: white;
+                        border: none;
+                        border-radius: 4px;
+                        cursor: pointer;
+                        margin-top: 8px;
+                    ">Wybierz stację</button>
+                </div>
+            `)
+            .addTo(map);
+        
+        markers[station.id] = marker;
     });
-}
-
-function addStationMarker(station) {
-    const marker = L.marker([station.lat, station.lng], {
-        title: station.name
-    }).addTo(map);
     
-    marker.bindPopup(`
-        <b>${station.name}</b><br>
-        ${station.location}<br>
-        <button onclick="selectStation('${station.id}')">Zobacz dane</button>
-    `);
+    console.log(`✅ Dodano ${Object.keys(markers).length} markerów na mapę`);
     
-    marker.on('click', () => {
-        selectStation(station.id);
-    });
-    
-    markers[station.id] = marker;
+    // POPRAWKA: Wymuś pokazanie wszystkich markerów
+    setTimeout(() => {
+        const bounds = L.latLngBounds(
+            stations.map(s => [s.lat, s.lng])
+        );
+        map.fitBounds(bounds, { padding: [50, 50] });
+        console.log('🎯 Wycentrowano mapę na wszystkie stacje');
+    }, 500);
 }
 
 // ========== MQTT ==========
@@ -348,6 +394,13 @@ function getSelectedRange(chartType) {
 }
 
 async function loadChart(chartType, hours) {
+    console.log(`🔍 loadChart wywołane: type=${chartType}, hours=${hours}, station=${currentStation}`);
+    
+    if (!currentStation) {
+        console.warn('⚠️ Brak wybranej stacji!');
+        return;
+    }
+    
     const fieldMap = {
         temp: 'temperature',
         humidity: 'humidity',
@@ -411,14 +464,19 @@ async function loadChart(chartType, hours) {
 
 // Fetch from InfluxDB
 async function fetchInfluxData(stationId, field, hours) {
+    console.log(`📡 Zapytanie: station=${stationId}, field=${field}, hours=${hours}`);
+    
     const query = `
         from(bucket: "${INFLUX_CONFIG.bucket}")
         |> range(start: -${hours}h)
         |> filter(fn: (r) => r["_measurement"] == "weather_measurement")
         |> filter(fn: (r) => r["_field"] == "${field}")
+        |> filter(fn: (r) => r["station_id"] == "${stationId}")
         |> aggregateWindow(every: ${hours >= 168 ? '2h' : hours >= 48 ? '1h' : hours >= 24 ? '30m' : hours >= 6 ? '10m' : '5m'}, fn: mean, createEmpty: false)
         |> yield(name: "mean")
     `;
+    
+    console.log(`📝 Query:\n${query}`);
     
     try {
         const response = await fetch(`${INFLUX_CONFIG.url}/api/v2/query?org=${INFLUX_CONFIG.org}`, {
@@ -431,14 +489,23 @@ async function fetchInfluxData(stationId, field, hours) {
             body: query
         });
         
+        console.log(`📡 Response status: ${response.status}`);
+        
         if (!response.ok) {
+            console.error(`❌ InfluxDB error: ${response.status}`);
             throw new Error(`InfluxDB error: ${response.status}`);
         }
         
         const csv = await response.text();
-        return parseInfluxCSV(csv);
+        console.log(`📄 Otrzymano CSV (pierwsze 300 znaków):`);
+        console.log(csv.substring(0, 300));
+        
+        const data = parseInfluxCSV(csv);
+        console.log(`✅ Sparsowano ${data.length} punktów danych`);
+        
+        return data;
     } catch (error) {
-        console.error('Błąd zapytania InfluxDB:', error);
+        console.error('❌ Błąd zapytania InfluxDB:', error);
         return null;
     }
 }
