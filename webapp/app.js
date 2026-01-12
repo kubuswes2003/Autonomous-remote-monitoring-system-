@@ -31,6 +31,15 @@ let stations = [
         lng: 16.8114048242569,
         location: "Gate_N - LoRa",
         type: "lora"
+    },
+    {
+        id: "station_lawica",
+        name: "EPPO - Lotnisko Ławica",
+        lat: 52.421,
+        lng: 16.826,
+        location: "Poznań-Ławica Airport",
+        type: "official",
+        color: "#FF9800"  // Pomarańczowy kolor dla official station
     }
 ];
 

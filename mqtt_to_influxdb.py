@@ -32,27 +32,59 @@ def on_message(client, userdata, msg):
     try:
         data = json.loads(msg.payload.decode())
         
-        # Stwórz punkt danych dla InfluxDB
-        point = Point("weather_measurement") \
-            .tag("station_id", data['station_id']) \
-            .field("temperature", float(data['sensors']['temperature'])) \
-            .field("humidity", float(data['sensors']['humidity'])) \
-            .field("pressure", float(data['sensors']['pressure'])) \
-            .field("wind_speed", float(data['sensors']['wind_speed'])) \
-            .field("wind_direction", float(data['sensors']['wind_direction'])) \
-            .field("battery_voltage", float(data['battery_voltage'])) \
-            .field("signal_strength", float(data['signal_strength'])) \
+        station_id = data.get('station_id')
+        sensors = data.get('sensors', {})
+        
+        # Pobierz wartości (mogą być None)
+        temperature = sensors.get('temperature')
+        humidity = sensors.get('humidity')
+        pressure = sensors.get('pressure')
+        wind_speed = sensors.get('wind_speed')
+        wind_direction = sensors.get('wind_direction')
+        battery_voltage = data.get('battery_voltage')
+        signal_strength = data.get('signal_strength')
+        
+        # Walidacja: temperatura i wilgotność MUSZĄ być
+        if temperature is None or humidity is None:
+            print(f"⚠️  Pominięto {station_id} - brak wymaganych pól (temp/humidity)")
+            return
+        
+        # Stwórz punkt danych
+        point = Point("weather_measurement").tag("station_id", station_id)
+        
+        # Dodaj TYLKO pola które NIE są None
+        point.field("temperature", float(temperature))
+        point.field("humidity", float(humidity))
+        
+        if pressure is not None:
+            point.field("pressure", float(pressure))
+        
+        if wind_speed is not None:
+            point.field("wind_speed", float(wind_speed))
+        
+        if wind_direction is not None:
+            point.field("wind_direction", float(wind_direction))
+        
+        if battery_voltage is not None:
+            point.field("battery_voltage", float(battery_voltage))
+        
+        if signal_strength is not None:
+            point.field("signal_strength", float(signal_strength))
         
         # Zapisz do InfluxDB
         write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=point)
         
-        print(f"✓ [{datetime.now().strftime('%H:%M:%S')}] Zapisano: "
-              f"Temp={data['sensors']['temperature']}°C, "
-              f"Wilg={data['sensors']['humidity']}%, "
-              f"Ciśn={data['sensors']['pressure']}hPa")
+        # Log (z obsługą None)
+        pressure_str = f"{pressure}hPa" if pressure is not None else "N/A"
+        print(f"✓ [{datetime.now().strftime('%H:%M:%S')}] {station_id}: "
+              f"Temp={temperature}°C, Wilg={humidity}%, Ciśn={pressure_str}")
         
+    except KeyError as e:
+        print(f"✗ Brak wymaganego pola: {e}")
     except Exception as e:
         print(f"✗ Błąd: {e}")
+        import traceback
+        traceback.print_exc()
 
 def main():
     client = mqtt.Client(client_id="mqtt_to_influx")

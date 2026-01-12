@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """
-LoRa Receiver Bridge
+LoRa Receiver Bridge - IMPROVED VERSION
 Odbiera dane z LoRa (10.58.40.99) i przekazuje do lokalnego MQTT (localhost)
-w formacie kompatybilnym z emulatorami.
+w formacie kompatybilnym z emulatorami i web UI.
+
+POPRAWKI:
+- Poprawione dekodowanie pakietu 0x12 (pressure był w złym miejscu)
+- Dodana obsługa pakietu 0x22 (wind speed, precipitation, analog inputs)
+- Lepsze nazewnictwo stacji (LORA_XXXXXX zamiast "Station XXXXXX")
+- Więcej szczegółów w metadanych
 """
 
 import paho.mqtt.client as mqtt
@@ -15,17 +21,23 @@ REMOTE_MQTT_BROKER = "10.58.40.99"
 REMOTE_MQTT_PORT = 1883
 REMOTE_MQTT_USERNAME = "dabrowskiego536"
 REMOTE_MQTT_PASSWORD = "Dabrowskiego196105070320032004"
-REMOTE_MQTT_TOPIC = "application/bcb75d00-e41b-4f24-9891-2d26072205e2/device/ac1f09fffe19fc8a/event/up"
+REMOTE_MQTT_TOPIC = "application/bcb75d00-e41b-4f24-9891-2d26072205e2/device/+/event/up"
 
 # ========== KONFIGURACJA LOKALNEGO BROKERA ==========
 LOCAL_MQTT_BROKER = "localhost"
 LOCAL_MQTT_PORT = 1883
 LOCAL_MQTT_TOPIC = "weather/station/data"
 
-# ========== DEKODERY ==========
+# ========== DEKODERY PAKIETÓW ==========
 
 def decode_packet_0x01(payload_hex):
-    """Power Module - napięcia cel i temperatury"""
+    """
+    Power Module (0x01) - every 6H
+    Format: 01 CCCC CCCC CCCC SSSS TTTT TTTT
+    - Cell voltages (3x 2 bytes) in mV
+    - Pack temp BMS side (2 bytes) in 0.01°C
+    - Pack temp charger side (2 bytes) in 0.01°C
+    """
     if len(payload_hex) < 14 or payload_hex[0:2] != "01":
         return None
     
@@ -42,68 +54,129 @@ def decode_packet_0x01(payload_hex):
     }
     
     if len(payload_hex) >= 22:
-        result["temp_bms"] = int(payload_hex[14:18], 16) / 100.0
-        result["temp_charger"] = int(payload_hex[18:22], 16) / 100.0
+        result["pack_temp_bms"] = int(payload_hex[14:18], 16) / 100.0
+        result["pack_temp_charger"] = int(payload_hex[18:22], 16) / 100.0
     
     return result
 
 def decode_packet_0x02(payload_hex):
-    """Weather Data - temperatura, wilgotność"""
+    """
+    Weather Data (0x02) - every 5 min
+    Format: 02 TTTT HHHH BBBB
+    Example: 02091D0E940929
+    - SHT45 temperature (2 bytes) in 0.01°C
+    - SHT45 humidity (2 bytes) in 0.01%
+    - BMP390 temperature (2 bytes) in 0.01°C
+    """
     if len(payload_hex) < 14 or payload_hex[0:2] != "02":
         return None
     
     return {
         "packet_type": "0x02",
-        "temperature": int(payload_hex[2:6], 16) / 100.0,
-        "humidity": int(payload_hex[6:10], 16) / 100.0,
-        "temp_bmp390": int(payload_hex[10:14], 16) / 100.0
+        "temperature": int(payload_hex[2:6], 16) / 100.0,     # SHT45
+        "humidity": int(payload_hex[6:10], 16) / 100.0,       # SHT45
+        "temp_bmp390": int(payload_hex[10:14], 16) / 100.0    # BMP390
     }
 
+def decode_packet_0x11(payload_hex):
+    """
+    Power Module Diagnostics (0x11) - every 6H
+    Format: 11 [various diagnostic data]
+    VBUS voltage, Charger status, current_BMS
+    Dokładny format nieznany - wyświetlamy surowe dane
+    """
+    if len(payload_hex) < 4 or payload_hex[0:2] != "11":
+        return None
+    
+    result = {
+        "packet_type": "0x11",
+        "module": "Power Module Diagnostics",
+        "raw_data": payload_hex[2:]  # Reszta jako surowe dane
+    }
+    
+    return result
+
 def decode_packet_0x12(payload_hex):
-    """Light + Pressure"""
-    if len(payload_hex) < 14 or payload_hex[0:2] != "12":
+    """
+    Light + Pressure (0x12) - every 10 min
+    Format: 12 LLLLLLLL WWWW PPPPPPPP
+    Example: 12000120CC039200018AFC
+    - VEML7700 Lux (4 bytes)
+    - VEML7700 white ratio (2 bytes) in 0.01
+    - BMP390 pressure (4 bytes) in 0.01 hPa
+    """
+    if len(payload_hex) < 22 or payload_hex[0:2] != "12":
         return None
     
     result = {
         "packet_type": "0x12",
-        "lux": int(payload_hex[2:10], 16),
-        "white_ratio": int(payload_hex[10:14], 16) / 100.0
+        "lux": int(payload_hex[2:10], 16),                    # 4 bytes
+        "white_ratio": int(payload_hex[10:14], 16) / 100.0,  # 2 bytes
+        "pressure": int(payload_hex[14:22], 16) / 100.0      # 4 bytes (NAPRAWIONE!)
     }
-    
-    if len(payload_hex) >= 18:
-        result["pressure"] = int(payload_hex[14:18], 16) / 100.0
     
     return result
 
+def decode_packet_0x22(payload_hex):
+    """
+    Wind + Rain + Analog (0x22) - every 15 min
+    Format: 22 WWWW RRRR AAAA BBBB
+    - Wind speed 15min avg (2 bytes) in 0.01 m/s
+    - Precipitation last 15min (2 bytes) in 0.01 mm
+    - Analog IN_1 tics in 15min (2 bytes)
+    - Analog IN_2 tics in 15min (2 bytes)
+    """
+    if len(payload_hex) < 18 or payload_hex[0:2] != "22":
+        return None
+    
+    return {
+        "packet_type": "0x22",
+        "wind_speed_avg": int(payload_hex[2:6], 16) / 100.0,
+        "precipitation_mm": int(payload_hex[6:10], 16) / 100.0,
+        "analog_in1_tics": int(payload_hex[10:14], 16),
+        "analog_in2_tics": int(payload_hex[14:18], 16)
+    }
+
 def decode_sudden_packet(payload_hex):
-    """Sudden packets (0x22, 0x32, etc.)"""
+    """
+    Sudden packets (0x32-0xF2) - on demand
+    Format: XX VVVV (typ + wartość 2 bajty)
+    """
     if len(payload_hex) < 6:
         return None
     
     packet_type = payload_hex[0:2]
     
     sudden_map = {
-        "22": ("humidity", 100.0), "32": ("temperature", 100.0),
-        "42": ("temp_bmp390", 100.0), "52": ("lux", 1.0),
-        "62": ("white_ratio", 100.0), "72": ("pressure", 100.0)
+        "32": ("temperature", 100.0, "°C", "Sudden SHT45 Temp"),
+        "42": ("humidity", 100.0, "%", "Sudden SHT45 Humidity"),
+        "52": ("temp_bmp390", 100.0, "°C", "Sudden BMP390 Temp"),
+        "62": ("lux", 1.0, "lux", "Sudden VEML7700 Lux"),
+        "72": ("white_ratio", 100.0, "", "Sudden VEML7700 White Ratio"),
+        "82": ("pressure", 100.0, "hPa", "Sudden BMP390 Pressure"),
+        "92": ("analog_in1", 100.0, "V", "Sudden Analog IN_1"),
+        "A2": ("analog_in2", 100.0, "V", "Sudden Analog IN_2"),
     }
     
     if packet_type not in sudden_map:
         return None
     
-    field, divisor = sudden_map[packet_type]
+    field, divisor, unit, description = sudden_map[packet_type]
     value = int(payload_hex[2:6], 16) / divisor
     
     return {
         "packet_type": f"0x{packet_type}",
         "sudden_field": field,
-        "sudden_value": value
+        "sudden_value": value,
+        "unit": unit,
+        "description": description
     }
 
 # ========== KLIENTY MQTT ==========
 
 local_client = mqtt.Client(client_id="lora_bridge_local")
 message_count = 0
+last_values = {}  # Przechowuje ostatnie wartości dla każdej stacji
 
 def on_local_connect(client, userdata, flags, rc):
     if rc == 0:
@@ -119,6 +192,23 @@ def on_remote_connect(client, userdata, flags, rc):
         client.subscribe(REMOTE_MQTT_TOPIC)
     else:
         print(f"❌ Błąd LoRa MQTT: {rc}")
+
+def get_or_create_station_data(station_id):
+    """Zwraca lub tworzy domyślne dane stacji"""
+    if station_id not in last_values:
+        last_values[station_id] = {
+            "temperature": None,
+            "humidity": None,
+            "pressure": None,
+            "wind_speed": None,
+            "temp_bmp390": None,
+            "lux": None,
+            "white_ratio": None,
+            "precipitation_mm": None,
+            "battery_voltage": 4.0,
+            "lora_metadata": {}  # Cache dla metadanych LoRa
+        }
+    return last_values[station_id]
 
 def on_remote_message(client, userdata, msg):
     global message_count
@@ -137,10 +227,10 @@ def on_remote_message(client, userdata, msg):
         dev_eui = device_info.get('devEui', 'UNKNOWN')
         device_name = device_info.get('deviceName', 'LoRa Station')
         
-        # Station ID: "Station " + last 6 chars of DevEUI
-        station_id = f"Station {dev_eui[-6:].upper()}"
+        # Station ID: station_ + pełny DevEUI (kompatybilne z bazą danych)
+        station_id = f"station_{dev_eui}"
         
-        # Location
+        # Location (default Poznań)
         lat, lng = 52.4064, 16.9252
         if 'rxInfo' in data and len(data['rxInfo']) > 0:
             rx_info = data['rxInfo'][0]
@@ -155,29 +245,119 @@ def on_remote_message(client, userdata, msg):
             rssi = data['rxInfo'][0].get('rssi', -100)
             snr = data['rxInfo'][0].get('snr', 0)
         
-        # Dekoduj
+        # Pobierz ostatnie wartości dla tej stacji
+        station_values = get_or_create_station_data(station_id)
+        
+        # Dekoduj pakiet
         decoded = None
-        for decoder in [decode_packet_0x01, decode_packet_0x02, decode_packet_0x12, decode_sudden_packet]:
+        for decoder in [decode_packet_0x01, decode_packet_0x02, decode_packet_0x11,
+                       decode_packet_0x12, decode_packet_0x22, decode_sudden_packet]:
             decoded = decoder(payload_hex)
             if decoded:
                 break
         
         if not decoded:
-            print(f"⚠️  [{message_count}] Nieznany packet: 0x{payload_hex[0:2]}")
+            print(f"⚠️  [{message_count}] Nieznany packet: 0x{payload_hex[0:2] if len(payload_hex) >= 2 else 'BRAK'}")
+            print(f"   • Długość HEX: {len(payload_hex)} znaków")
+            print(f"   • Pełny payload: {payload_hex}")
             return
         
-        # Przygotuj JSON w formacie emulatorów
+        # Wyświetl surowy HEX payload
+        print(f"\n{'='*70}")
+        print(f"📨 [{message_count}] OTRZYMANO PAKIET LoRa")
+        print(f"{'='*70}")
+        print(f"🔸 Station ID: {station_id}")
+        print(f"🔸 Device EUI: {dev_eui}")
+        print(f"🔸 Surowy HEX: {payload_hex}")
+        print(f"🔸 Typ pakietu: {decoded['packet_type']}")
+        
+        # Zaktualizuj wartości stacji na podstawie pakietu i wyświetl zdekodowane dane
+        if decoded['packet_type'] == '0x01':
+            # Power Module - aktualizuj baterię i metadata
+            station_values['battery_voltage'] = decoded.get('battery_voltage', 4.0)
+            station_values['lora_metadata']['power_module'] = {
+                'cell1': decoded['cell1_voltage'],
+                'cell2': decoded['cell2_voltage'],
+                'cell3': decoded['cell3_voltage']
+            }
+            if 'pack_temp_bms' in decoded:
+                station_values['lora_metadata']['power_module']['temp_bms'] = decoded['pack_temp_bms']
+                station_values['lora_metadata']['power_module']['temp_charger'] = decoded['pack_temp_charger']
+            
+            print(f"\n🔋 ZDEKODOWANE DANE (Power Module):")
+            print(f"   • Cell 1 voltage: {decoded['cell1_voltage']:.3f}V")
+            print(f"   • Cell 2 voltage: {decoded['cell2_voltage']:.3f}V")
+            print(f"   • Cell 3 voltage: {decoded['cell3_voltage']:.3f}V")
+            print(f"   • Total battery: {decoded['battery_voltage']:.3f}V")
+            if 'pack_temp_bms' in decoded:
+                print(f"   • Pack temp BMS: {decoded['pack_temp_bms']:.2f}°C")
+                print(f"   • Pack temp Charger: {decoded['pack_temp_charger']:.2f}°C")
+        
+        elif decoded['packet_type'] == '0x11':
+            # Power Module Diagnostics - zapisz do metadata
+            station_values['lora_metadata']['power_diagnostics'] = {
+                'module': decoded['module'],
+                'raw_data': decoded['raw_data']
+            }
+            
+            print(f"\n🔧 ZDEKODOWANE DANE (Power Diagnostics):")
+            print(f"   • Module: {decoded['module']}")
+            print(f"   • Raw data: {decoded['raw_data']}")
+        
+        elif decoded['packet_type'] == '0x02':
+            station_values['temperature'] = decoded['temperature']
+            station_values['humidity'] = decoded['humidity']
+            station_values['temp_bmp390'] = decoded['temp_bmp390']
+            station_values['lora_metadata']['temp_bmp390'] = decoded['temp_bmp390']
+            
+            print(f"\n🌡️  ZDEKODOWANE DANE (Weather Data):")
+            print(f"   • Temperatura SHT45: {decoded['temperature']:.2f}°C")
+            print(f"   • Wilgotność SHT45: {decoded['humidity']:.2f}%")
+            print(f"   • Temperatura BMP390: {decoded['temp_bmp390']:.2f}°C")
+        
+        elif decoded['packet_type'] == '0x12':
+            station_values['lux'] = decoded['lux']
+            station_values['white_ratio'] = decoded['white_ratio']
+            station_values['pressure'] = decoded['pressure']
+            station_values['lora_metadata']['lux'] = decoded['lux']
+            station_values['lora_metadata']['white_ratio'] = decoded['white_ratio']
+            
+            print(f"\n💡 ZDEKODOWANE DANE (Light + Pressure):")
+            print(f"   • Lux: {decoded['lux']}")
+            print(f"   • White Ratio: {decoded['white_ratio']:.2f}")
+            print(f"   • Ciśnienie BMP390: {decoded['pressure']:.2f} hPa")
+        
+        elif decoded['packet_type'] == '0x22':
+            station_values['wind_speed'] = decoded['wind_speed_avg']
+            station_values['precipitation_mm'] = decoded['precipitation_mm']
+            
+            print(f"\n💨 ZDEKODOWANE DANE (Wind + Rain):")
+            print(f"   • Średnia prędkość wiatru (15min): {decoded['wind_speed_avg']:.2f} m/s")
+            print(f"   • Opady (15min): {decoded['precipitation_mm']:.2f} mm")
+            print(f"   • Analog IN_1 tics: {decoded['analog_in1_tics']}")
+            print(f"   • Analog IN_2 tics: {decoded['analog_in2_tics']}")
+        
+        elif decoded['packet_type'].startswith('0x') and 'sudden_field' in decoded:
+            field = decoded['sudden_field']
+            value = decoded['sudden_value']
+            station_values[field] = value
+            
+            print(f"\n⚡ ZDEKODOWANE DANE (Sudden Reading):")
+            print(f"   • {decoded['description']}: {value:.2f} {decoded['unit']}")
+            print(f"   • Pole: {field}")
+        
+        # Przygotuj JSON dla lokalnego MQTT (format jak emulatory)
         output = {
             "station_id": station_id,
             "timestamp": datetime.now().isoformat(),
             "sensors": {
-                "temperature": 20.0,
-                "humidity": 50.0,
-                "pressure": 1013.25,
-                "wind_speed": 0.0,
-                "wind_direction": 0.0
+                "temperature": station_values['temperature'] if station_values['temperature'] is not None else 20.0,
+                "humidity": station_values['humidity'] if station_values['humidity'] is not None else 50.0,
+                "pressure": station_values['pressure'] if station_values['pressure'] is not None else 1013.25,
+                "wind_speed": station_values['wind_speed'] if station_values['wind_speed'] is not None else 0.0,
+                "wind_direction": 0  # Brak kierunku wiatru w obecnych pakietach
             },
-            "battery_voltage": 4.0,
+            "battery_voltage": station_values['battery_voltage'],
             "signal_strength": rssi,
             "lat": lat,
             "lng": lng,
@@ -187,49 +367,45 @@ def on_remote_message(client, userdata, msg):
                 "dev_eui": dev_eui,
                 "device_name": device_name,
                 "snr": snr,
-                "packet_type": decoded['packet_type']
+                "packet_type": decoded['packet_type'],
+                "raw_hex": payload_hex,
+                **station_values['lora_metadata']  # Dodaj wszystkie cache'owane metadata
             }
         }
-        
-        # Wypełnij danymi z pakietu
-        if decoded['packet_type'] == '0x01':
-            output['battery_voltage'] = decoded.get('battery_voltage', 4.0)
-            output['lora_metadata']['cell1_voltage'] = decoded['cell1_voltage']
-            output['lora_metadata']['cell2_voltage'] = decoded['cell2_voltage']
-            output['lora_metadata']['cell3_voltage'] = decoded['cell3_voltage']
-            if 'temp_bms' in decoded:
-                output['lora_metadata']['temp_bms'] = decoded['temp_bms']
-            if 'temp_charger' in decoded:
-                output['lora_metadata']['temp_charger'] = decoded['temp_charger']
-        
-        elif decoded['packet_type'] == '0x02':
-            output['sensors']['temperature'] = decoded['temperature']
-            output['sensors']['humidity'] = decoded['humidity']
-            output['lora_metadata']['temp_bmp390'] = decoded['temp_bmp390']
-        
-        elif decoded['packet_type'] == '0x12':
-            output['lora_metadata']['lux'] = decoded['lux']
-            output['lora_metadata']['white_ratio'] = decoded['white_ratio']
-            if 'pressure' in decoded:
-                output['sensors']['pressure'] = decoded['pressure']
-        
-        elif decoded['packet_type'].startswith('0x'):
-            field = decoded['sudden_field']
-            value = decoded['sudden_value']
-            if field in ['temperature', 'humidity', 'pressure']:
-                output['sensors'][field] = value
-            output['lora_metadata']['sudden_reading'] = {
-                'field': field,
-                'value': value
-            }
         
         # Wyślij do lokalnego MQTT
         result = local_client.publish(LOCAL_MQTT_TOPIC, json.dumps(output))
         
+        # Pokaż najważniejsze pola z wysyłanego JSON'a
+        print(f"\n📤 WYSYŁAM DO LOKALNEGO MQTT:")
+        print(f"   • Station ID: {output['station_id']}")
+        print(f"   • Temperatura: {output['sensors']['temperature']:.2f}°C")
+        print(f"   • Wilgotność: {output['sensors']['humidity']:.2f}%")
+        print(f"   • Ciśnienie: {output['sensors']['pressure']:.2f} hPa")
+        print(f"   • Prędkość wiatru: {output['sensors']['wind_speed']:.2f} m/s")
+        print(f"   • Bateria: {output['battery_voltage']:.2f}V")
+        print(f"   • RSSI: {output['signal_strength']} dBm")
+        print(f"   • SNR: {output['lora_metadata']['snr']:.1f} dB")
+        
+        # Pokaż dodatkowe metadane jeśli są w cache
+        metadata = output['lora_metadata']
+        if 'temp_bmp390' in metadata:
+            print(f"   • Temp BMP390: {metadata['temp_bmp390']:.2f}°C")
+        if 'lux' in metadata:
+            print(f"   • Lux: {metadata['lux']}")
+        if 'white_ratio' in metadata:
+            print(f"   • White Ratio: {metadata['white_ratio']:.2f}")
+        if 'power_module' in metadata:
+            print(f"   • Power Module: Cell1={metadata['power_module']['cell1']:.3f}V, Cell2={metadata['power_module']['cell2']:.3f}V, Cell3={metadata['power_module']['cell3']:.3f}V")
+        if 'power_diagnostics' in metadata:
+            print(f"   • Power Diagnostics: {metadata['power_diagnostics']['raw_data']}")
+        
         if result.rc == 0:
-            print(f"📤 [{message_count}] {decoded['packet_type']} → {station_id}")
+            print(f"\n✅ Pomyślnie wysłano do MQTT")
         else:
-            print(f"❌ [{message_count}] Błąd wysyłania: {result.rc}")
+            print(f"\n❌ Błąd wysyłania: {result.rc}")
+        
+        print(f"{'='*70}\n")
         
     except Exception as e:
         print(f"❌ Błąd przetwarzania: {e}")
@@ -237,7 +413,7 @@ def on_remote_message(client, userdata, msg):
         traceback.print_exc()
 
 def main():
-    print("🚀 LoRa → MQTT Bridge")
+    print("🚀 LoRa → MQTT Bridge (IMPROVED)")
     print(f"📡 LoRa: {REMOTE_MQTT_BROKER}:{REMOTE_MQTT_PORT}")
     print(f"💾 Local: {LOCAL_MQTT_BROKER}:{LOCAL_MQTT_PORT}")
     print("\nNaciśnij Ctrl+C aby zatrzymać\n")
@@ -252,7 +428,7 @@ def main():
         return
     
     # Zdalny klient
-    remote_client = mqtt.Client(client_id="lora_bridge_remote")
+    remote_client = mqtt.Client(client_id="lora_bridge_remote_v2")
     remote_client.username_pw_set(REMOTE_MQTT_USERNAME, REMOTE_MQTT_PASSWORD)
     remote_client.on_connect = on_remote_connect
     remote_client.on_message = on_remote_message
