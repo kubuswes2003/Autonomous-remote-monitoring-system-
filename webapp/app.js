@@ -128,7 +128,7 @@ function initMap() {
 
 // ========== MQTT ==========
 function initMQTT() {
-    mqttClient = mqtt.connect('ws://10.58.40.97:9001');
+    mqttClient = mqtt.connect('ws://' + window.location.host + '/mqtt');
 
     const statusDot = document.getElementById('mqtt-status');
     const statusText = document.getElementById('mqtt-status-text');

@@ -1,34 +1,31 @@
 #!/usr/bin/env python3
 """
-IMGW Meteo Collector - Poznań-Ławica
-Pobiera dane meteorologiczne z IMGW-PIB (polski instytut) i zapisuje do InfluxDB
-Nie wymaga pandas/meteostat - działa na każdym systemie!
+IMGW Meteo Collector → MQTT Bridge
+Pobiera dane meteorologiczne z IMGW-PIB i wysyła do MQTT
+mqtt_to_influxdb.py następnie zapisze je do InfluxDB (tak jak dane z LoRa)
 """
 
+import paho.mqtt.client as mqtt
 import requests
 import json
-from datetime import datetime, timedelta
-from influxdb_client import InfluxDBClient, Point as InfluxPoint
-from influxdb_client.client.write_api import SYNCHRONOUS
+from datetime import datetime
 import sys
 
 # ========== KONFIGURACJA ==========
 
 # Poznań-Ławica
-STATION_ID = "station_lawica"  # BEZ polskich znaków!
+STATION_ID = "station_lawica"  # ASCII (bez polskich znaków)
 STATION_NAME = "EPPO - Lotnisko Ławica"
 STATION_LAT = 52.421
 STATION_LNG = 16.826
 
 # IMGW-PIB API
-# Dane synoptyczne (pomiary co godzinę) ze stacji Poznań
 IMGW_API_URL = "https://danepubliczne.imgw.pl/api/data/synop"
 
-# InfluxDB
-INFLUX_URL = "http://localhost:8086"
-INFLUX_TOKEN = "my-super-secret-token"
-INFLUX_ORG = "weather"
-INFLUX_BUCKET = "weather_data"
+# MQTT (lokalny broker - tak jak LoRa bridge)
+MQTT_BROKER = "localhost"
+MQTT_PORT = 1883
+MQTT_TOPIC = "weather/station/data"  # Ten sam topic co LoRa!
 
 # ========== FUNKCJE ==========
 
@@ -58,14 +55,10 @@ def get_imgw_data():
         
         if not poznan_station:
             print("❌ Nie znaleziono stacji Poznań w danych IMGW")
-            print("   Dostępne stacje:")
-            for s in stations[:10]:  # Pokaż pierwsze 10
-                print(f"     - {s.get('stacja')}")
             return None
         
         # Wyciągnij dane
         result = {
-            'timestamp': datetime.now(),  # IMGW nie daje dokładnego timestampu w API
             'station_name': poznan_station.get('stacja'),
             'temperature': parse_float(poznan_station.get('temperatura')),
             'humidity': parse_float(poznan_station.get('wilgotnosc_wzgledna')),
@@ -82,11 +75,8 @@ def get_imgw_data():
         
         return result
         
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Błąd połączenia z IMGW API: {e}")
-        return None
     except Exception as e:
-        print(f"❌ Błąd przetwarzania danych: {e}")
+        print(f"❌ Błąd pobierania danych: {e}")
         import traceback
         traceback.print_exc()
         return None
@@ -94,7 +84,6 @@ def get_imgw_data():
 def parse_float(value):
     """
     Bezpiecznie konwertuje wartość na float
-    IMGW czasami zwraca None lub string
     """
     if value is None or value == '':
         return None
@@ -103,49 +92,58 @@ def parse_float(value):
     except (ValueError, TypeError):
         return None
 
-def save_to_influxdb(weather_data):
+def send_to_mqtt(weather_data):
     """
-    Zapisuje dane do InfluxDB
+    Wysyła dane do MQTT w TAKIM SAMYM FORMACIE jak LoRa bridge
     """
     try:
-        # Połącz z InfluxDB
-        client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
-        write_api = client.write_api(write_options=SYNCHRONOUS)
+        # Przygotuj JSON (identyczny format jak lora_receiver_bridge.py)
+        payload = {
+            "station_id": STATION_ID,
+            "timestamp": datetime.now().isoformat(),
+            "sensors": {
+                "temperature": weather_data['temperature'] if weather_data['temperature'] is not None else 20.0,
+                "humidity": weather_data['humidity'] if weather_data['humidity'] is not None else 50.0,
+                "pressure": weather_data['pressure'] if weather_data['pressure'] is not None else 1013.25,
+                "wind_speed": (weather_data['wind_speed'] / 3.6) if weather_data['wind_speed'] is not None else 0.0,  # km/h → m/s
+                "wind_direction": weather_data['wind_direction'] if weather_data['wind_direction'] is not None else 0
+            },
+            "battery_voltage": 0.0,  # IMGW nie ma baterii (zasilanie sieciowe)
+            "signal_strength": -50,  # Stała wartość (zawsze dobre połączenie)
+            "lat": STATION_LAT,
+            "lng": STATION_LNG,
+            "location": STATION_NAME,
+            "is_lora": False,  # To nie jest LoRa, to IMGW
+            "imgw_metadata": {
+                "source": "IMGW-PIB",
+                "station_name": weather_data['station_name'],
+                "api_url": IMGW_API_URL
+            }
+        }
         
-        # Przygotuj punkt danych (taka sama struktura jak LoRa)
-        point = InfluxPoint("weather_measurement") \
-            .tag("station_id", STATION_ID) \
-            .time(weather_data['timestamp'])
+        # Połącz z MQTT
+        client = mqtt.Client(client_id="imgw_collector")
+        client.connect(MQTT_BROKER, MQTT_PORT, 60)
         
-        # Dodaj pola (tylko jeśli nie są None)
-        if weather_data['temperature'] is not None:
-            point.field("temperature", float(weather_data['temperature']))
+        # Wyślij
+        payload_str = json.dumps(payload)
+        result = client.publish(MQTT_TOPIC, payload_str, qos=1)
         
-        if weather_data['humidity'] is not None:
-            point.field("humidity", float(weather_data['humidity']))
+        if result.rc == 0:
+            print(f"\n✅ Wysłano do MQTT:")
+            print(f"   Broker: {MQTT_BROKER}:{MQTT_PORT}")
+            print(f"   Topic: {MQTT_TOPIC}")
+            print(f"   Station: {STATION_ID}")
+            print(f"\n💡 Teraz mqtt_to_influxdb.py zapisze to do InfluxDB automatycznie!")
+        else:
+            print(f"❌ Błąd wysyłania do MQTT: {result.rc}")
+            return False
         
-        if weather_data['pressure'] is not None:
-            point.field("pressure", float(weather_data['pressure']))
-        
-        if weather_data['wind_speed'] is not None:
-            point.field("wind_speed", float(weather_data['wind_speed']))
-        
-        if weather_data['wind_direction'] is not None:
-            point.field("wind_direction", float(weather_data['wind_direction']))  # float zamiast int!
-        
-        # Zapisz do InfluxDB
-        write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=point)
-        
-        print(f"\n✅ Zapisano do InfluxDB:")
-        print(f"   Bucket: {INFLUX_BUCKET}")
-        print(f"   Station: {STATION_ID}")
-        print(f"   Timestamp: {weather_data['timestamp']}")
-        
-        client.close()
+        client.disconnect()
         return True
         
     except Exception as e:
-        print(f"❌ Błąd zapisu do InfluxDB: {e}")
+        print(f"❌ Błąd wysyłania do MQTT: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -155,7 +153,7 @@ def main():
     Główna funkcja
     """
     print("=" * 70)
-    print(f"🌤️  IMGW Meteo Collector - {STATION_NAME}")
+    print(f"🌤️  IMGW → MQTT Bridge - {STATION_NAME}")
     print(f"⏰ Start: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70)
     
@@ -166,17 +164,17 @@ def main():
         print("❌ Nie udało się pobrać danych")
         sys.exit(1)
     
-    # Zapisz do InfluxDB
-    success = save_to_influxdb(weather_data)
+    # Wyślij do MQTT
+    success = send_to_mqtt(weather_data)
     
     if success:
         print("=" * 70)
-        print("✅ Sukces! Dane zapisane.")
+        print("✅ Sukces! Dane wysłane do MQTT.")
         print("=" * 70)
         sys.exit(0)
     else:
         print("=" * 70)
-        print("❌ Błąd! Dane nie zostały zapisane.")
+        print("❌ Błąd! Dane nie zostały wysłane.")
         print("=" * 70)
         sys.exit(1)
 
