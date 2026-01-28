@@ -58,14 +58,11 @@ const translations = {
     }
 };
 
-// Current language (default: EN)
 let currentLang = 'en';
 
-// Language switcher function
 function switchLanguage(lang) {
     currentLang = lang;
     
-    // Update button states
     document.querySelectorAll('.lang-btn').forEach(btn => {
         if (btn.dataset.lang === lang) {
             btn.classList.add('active');
@@ -74,7 +71,6 @@ function switchLanguage(lang) {
         }
     });
     
-    // Update all translatable elements
     document.querySelectorAll('[data-i18n]').forEach(el => {
         const key = el.getAttribute('data-i18n');
         if (translations[lang][key]) {
@@ -82,18 +78,42 @@ function switchLanguage(lang) {
         }
     });
     
-    // Refresh current view if station is selected
     if (currentStation && currentData[currentStation]) {
         updateCurrentView(currentData[currentStation]);
     }
 }
 
-// Translate function
 function t(key) {
     return translations[currentLang][key] || key;
 }
 
-// ========== KONFIGURACJA STACJI - DODANA STACJA LoRa NA STAŁE ==========
+// ========== DYNAMICZNA KONFIGURACJA ==========
+const isLocal = window.location.hostname.includes('10.58.40.97');
+const isHTTPS = window.location.protocol === 'https:';
+
+const INFLUX_CONFIG = isLocal ? {
+    url: '/influx',
+    token: 'my-super-secret-token',
+    org: 'weather',
+    bucket: 'weather_data'
+} : {
+    url: '/influxdb',
+    token: 'my-super-secret-token',
+    org: 'weather',
+    bucket: 'weather_data'
+};
+
+const MQTT_URL = isLocal 
+    ? 'ws://10.58.40.97:9001/mqtt'
+    : `${isHTTPS ? 'wss:' : 'ws:'}//${window.location.host}/mqtt`;
+
+console.log('🌍 Mode:', isLocal ? 'LOCAL' : 'PUBLIC');
+console.log('📡 MQTT:', MQTT_URL);
+console.log('💾 InfluxDB:', INFLUX_CONFIG.url);
+
+
+
+// ========== KONFIGURACJA STACJI ==========
 let stations = [
     {
         id: "WEATHER_STATION_01",
@@ -120,7 +140,7 @@ let stations = [
         type: "emulator"
     },
     {
-        id: "station_ac1f09fffe19fc8a",
+        id: "station_ac1f09fffe1e035f",
         name: "Station LoRa - Gate N",
         lat: 52.430968906936855,
         lng: 16.8114048242569,
@@ -138,20 +158,13 @@ let stations = [
     }
 ];
 
-// Konfiguracja InfluxDB
-const INFLUX_CONFIG = {
-    url: 'http://10.58.40.97:8086',
-    token: 'my-super-secret-token',
-    org: 'weather',
-    bucket: 'weather_data'
-};
 
-// Stan aplikacji
 let map = null;
 let markers = {};
 let currentStation = null;
 let mqttClient = null;
 let currentData = {};
+let predictionData = {};
 let charts = {
     temp: null,
     humidity: null,
@@ -159,7 +172,6 @@ let charts = {
     wind: null
 };
 
-// Inicjalizacja
 document.addEventListener('DOMContentLoaded', () => {
     initMap();
     initMQTT();
@@ -227,7 +239,8 @@ function initMap() {
 
 // ========== MQTT ==========
 function initMQTT() {
-    mqttClient = mqtt.connect('ws://' + window.location.host + '/mqtt');
+    
+    mqttClient = mqtt.connect(MQTT_URL);  // Używa dynamicznego URL z góry
 
     const statusDot = document.getElementById('mqtt-status');
     const statusText = document.getElementById('mqtt-status-text');
@@ -238,6 +251,7 @@ function initMQTT() {
         statusText.textContent = t('connected');
 
         mqttClient.subscribe('weather/station/data');
+        mqttClient.subscribe('weather/predictions');
     });
 
     mqttClient.on('error', (error) => {
@@ -249,14 +263,124 @@ function initMQTT() {
     mqttClient.on('message', (topic, message) => {
         try {
             const data = JSON.parse(message.toString());
-            handleDataUpdate(data);
+            
+            if (topic === 'weather/predictions') {
+                handlePredictionUpdate(data);
+            } else {
+                handleDataUpdate(data);
+            }
         } catch (e) {
             console.error('Parse error:', e);
         }
     });
 }
 
-// ========== OBSŁUGA DANYCH - CZĘŚCIOWA AKTUALIZACJA ==========
+// ========== PREDICTIONS ==========
+function handlePredictionUpdate(data) {
+    console.log('Received prediction:', data.station_id);
+    predictionData[data.station_id] = data;
+    
+    if (currentStation === data.station_id) {
+        updatePredictionsView(data);
+    }
+}
+
+function updatePredictionsView(data) {
+    document.getElementById('loading-predictions').style.display = 'none';
+    const container = document.getElementById('predictions-data');
+    container.style.display = 'block';
+    
+    const current = data.current;
+    const predicted = data.predicted;
+    
+    const tempChange = predicted.temperature - current.temperature;
+    const pressureChange = predicted.pressure - current.pressure;
+    const humidityChange = predicted.humidity - current.humidity;
+    
+    container.innerHTML = `
+        <h3 style="color: #667eea; margin-bottom: 10px;">ML Prediction (1 hour ahead)</h3>
+        <p style="color: #718096; margin-bottom: 20px; font-size: 0.9em;">
+            Current: ${new Date(data.current_time).toLocaleTimeString('pl-PL')} → 
+            Prediction: ${new Date(data.prediction_time).toLocaleTimeString('pl-PL')}
+        </p>
+        
+        <div class="parameter-card">
+            <div class="parameter-header">
+                <div class="parameter-label">
+                    <span>Temperature</span>
+                </div>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div style="width: 100%;">
+                    <div style="font-size: 1.3em; color: #2d3748; margin-bottom: 8px;">
+                        ${current.temperature.toFixed(1)}°C → <strong style="color: #667eea;">${predicted.temperature.toFixed(1)}°C</strong>
+                    </div>
+                    <div style="font-size: 0.9em; color: ${tempChange > 0 ? '#f56565' : '#48bb78'};">
+                        ${tempChange > 0 ? '↑' : '↓'} ${Math.abs(tempChange).toFixed(2)}°C
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="parameter-card">
+            <div class="parameter-header">
+                <div class="parameter-label">
+                    <span>Pressure</span>
+                </div>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div style="width: 100%;">
+                    <div style="font-size: 1.3em; color: #2d3748; margin-bottom: 8px;">
+                        ${current.pressure.toFixed(1)} hPa → <strong style="color: #667eea;">${predicted.pressure.toFixed(1)} hPa</strong>
+                    </div>
+                    <div style="font-size: 0.9em; color: ${pressureChange > 0 ? '#48bb78' : '#f56565'};">
+                        ${pressureChange > 0 ? '↑' : '↓'} ${Math.abs(pressureChange).toFixed(2)} hPa
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="parameter-card">
+            <div class="parameter-header">
+                <div class="parameter-label">
+                    <span>Humidity</span>
+                </div>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div style="width: 100%;">
+                    <div style="font-size: 1.3em; color: #2d3748; margin-bottom: 8px;">
+                        ${current.humidity.toFixed(1)}% → <strong style="color: #667eea;">${predicted.humidity.toFixed(1)}%</strong>
+                    </div>
+                    <div style="font-size: 0.9em; color: ${humidityChange > 0 ? '#48bb78' : '#f56565'};">
+                        ${humidityChange > 0 ? '↑' : '↓'} ${Math.abs(humidityChange).toFixed(2)}%
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="system-info" style="margin-top: 20px;">
+            <h3>ℹ️ Model Information</h3>
+            <div class="info-row">
+                <span class="info-label">Algorithm:</span>
+                <span class="info-value">Gradient Boosting</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Features:</span>
+                <span class="info-value">166 engineered</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Training data:</span>
+                <span class="info-value">IMGW Poznań-Ławica 2025</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Accuracy (MAE):</span>
+                <span class="info-value">Temp: 0.04°C | Press: 0.05hPa | Hum: 0.05%</span>
+            </div>
+        </div>
+    `;
+}
+
+// ========== OBSŁUGA DANYCH ==========
 function handleDataUpdate(data) {
     updateStationLocation(data);
 
@@ -316,7 +440,6 @@ function updateStationLocation(data) {
     }
 }
 
-// ========== ŁADOWANIE STACJI Z INFLUXDB (PRZY STARCIE) ==========
 async function loadAllStationsFromInfluxDB() {
     console.log('Loading last data from all stations...');
     
@@ -364,6 +487,7 @@ async function fetchLastReading(stationId) {
     try {
         const response = await fetch(`${INFLUX_CONFIG.url}/api/v2/query?org=${INFLUX_CONFIG.org}`, {
             method: 'POST',
+            credentials: 'include', // <--- FIX: Dodano autoryzację sesji
             headers: {
                 'Authorization': `Token ${INFLUX_CONFIG.token}`,
                 'Content-Type': 'application/vnd.flux',
@@ -489,9 +613,12 @@ function switchTab(tabName) {
     if (tabName === 'charts' && currentStation) {
         loadAllCharts();
     }
+    
+    if (tabName === 'predictions' && currentStation && predictionData[currentStation]) {
+        updatePredictionsView(predictionData[currentStation]);
+    }
 }
 
-// ========== DROPDOWNS ==========
 function initDropdowns() {
     document.querySelectorAll('.time-range-button').forEach(button => {
         button.addEventListener('click', (e) => {
@@ -536,7 +663,6 @@ function initDropdowns() {
     });
 }
 
-// ========== STATION SELECTION ==========
 function initStationSelector() {
     const select = document.getElementById('station-select');
 
@@ -572,7 +698,6 @@ function selectStation(stationId) {
     }
 }
 
-// ========== CURRENT VIEW - NO EMOJIS ==========
 function updateCurrentView(data) {
     document.getElementById('loading-current').style.display = 'none';
     const container = document.getElementById('current-data');
@@ -594,7 +719,6 @@ function updateCurrentView(data) {
     };
 
     container.innerHTML = `
-        <!-- Temperature -->
         <div class="parameter-card">
             <div class="parameter-header">
                 <div class="parameter-label">
@@ -608,7 +732,6 @@ function updateCurrentView(data) {
             </div>
         </div>
         
-        <!-- Humidity -->
         <div class="parameter-card">
             <div class="parameter-header">
                 <div class="parameter-label">
@@ -622,7 +745,6 @@ function updateCurrentView(data) {
             </div>
         </div>
         
-        <!-- Pressure -->
         <div class="parameter-card">
             <div class="parameter-header">
                 <div class="parameter-label">
@@ -636,7 +758,6 @@ function updateCurrentView(data) {
             </div>
         </div>
         
-        <!-- Wind -->
         <div class="parameter-card">
             <div class="parameter-header">
                 <div class="parameter-label">
@@ -650,7 +771,6 @@ function updateCurrentView(data) {
             </div>
         </div>
         
-        <!-- System Info -->
         <div class="system-info">
             <h3>${t('system_info')}</h3>
             <div class="info-row">
@@ -672,7 +792,6 @@ function updateCurrentView(data) {
         </div>
     `;
     
-    // ========== ADDITIONAL LoRa DATA ==========
     if (data.is_lora && data.lora_metadata) {
         const meta = data.lora_metadata;
         let loraHtml = `
@@ -756,7 +875,7 @@ function updateCurrentView(data) {
     }
 }
 
-// ========== CHARTS ==========
+// ========== CHARTS (bez zmian) ==========
 function loadAllCharts() {
     loadChart('temp', getSelectedRange('temp'));
     loadChart('humidity', getSelectedRange('humidity'));
@@ -846,6 +965,7 @@ async function fetchInfluxData(stationId, field, hours) {
     try {
         const response = await fetch(`${INFLUX_CONFIG.url}/api/v2/query?org=${INFLUX_CONFIG.org}`, {
             method: 'POST',
+            credentials: 'include', // <--- FIX: Dodano autoryzację sesji
             headers: {
                 'Authorization': `Token ${INFLUX_CONFIG.token}`,
                 'Content-Type': 'application/vnd.flux',

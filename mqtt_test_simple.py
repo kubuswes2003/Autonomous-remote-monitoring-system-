@@ -9,7 +9,7 @@ MQTT_BROKER = "10.58.40.99"
 MQTT_PORT = 1883
 MQTT_USERNAME = "dabrowskiego536"
 MQTT_PASSWORD = "Dabrowskiego196105070320032004"
-MQTT_TOPIC = "application/bcb75d00-e41b-4f24-9891-2d26072205e2/device/ac1f09fffe19fc8a/event/up"
+MQTT_TOPIC = "application/848a1f13-a778-479b-a212-1259aaab662b/device/ac1f09fffe1e035f/event/up"
 
 # Statystyki
 message_count = 0

@@ -238,10 +238,6 @@
             font-size: 0.9em;
         }
         
-        .parameter-icon {
-            font-size: 1.5em;
-        }
-        
         .parameter-value {
             font-size: 2em;
             font-weight: bold;
@@ -484,7 +480,7 @@
                     <option value="WEATHER_STATION_01">Station 01 - Strzeszyn</option>
                     <option value="WEATHER_STATION_02">Station 02 - Winogrady</option>
                     <option value="WEATHER_STATION_03">Station 03 - Rataje</option>
-                    <option value="station_ac1f09fffe19fc8a">Station LoRa</option>
+                    <option value="station_ac1f09fffe1e035f">Station LoRa</option>
                     <option value="station_lawica">Station Ławica</option>
                 </select>
             </div>
@@ -493,6 +489,7 @@
             <div class="tabs">
                 <button class="tab active" data-tab="current" data-i18n="tab_current">Current</button>
                 <button class="tab" data-tab="charts" data-i18n="tab_charts">Charts</button>
+                <button class="tab" data-tab="predictions">Predictions</button>
             </div>
             
             <!-- Tab Content -->
@@ -625,6 +622,15 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- Predictions Tab -->
+                <div id="predictions-pane" class="tab-pane">
+                    <div class="loading" id="loading-predictions">
+                        <div class="spinner"></div>
+                        <p>Waiting for predictions...</p>
+                    </div>
+                    <div id="predictions-data" style="display: none;"></div>
+                </div>
             </div>
         </div>
     </div>
@@ -636,6 +642,6 @@
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     
     <!-- Cache busting -->
-    <script src="app.js?v=8"></script>
+    <script src="app.js?v=9"></script>
 </body>
 </html>
