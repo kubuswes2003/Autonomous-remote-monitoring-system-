@@ -14,6 +14,7 @@ const translations = {
         humidity: 'Humidity',
         pressure: 'Pressure',
         wind: 'Wind',
+        lux: 'Light Intensity',
         ago: 'ago',
         system_info: 'System Information',
         lora_info: 'Additional LoRa Data',
@@ -42,6 +43,7 @@ const translations = {
         humidity: 'Wilgotność',
         pressure: 'Ciśnienie',
         wind: 'Wiatr',
+        lux: 'Natężenie światła',
         ago: 'temu',
         system_info: 'Informacje systemowe',
         lora_info: 'Dodatkowe dane LoRa',
@@ -62,7 +64,7 @@ let currentLang = 'en';
 
 function switchLanguage(lang) {
     currentLang = lang;
-    
+
     document.querySelectorAll('.lang-btn').forEach(btn => {
         if (btn.dataset.lang === lang) {
             btn.classList.add('active');
@@ -70,14 +72,14 @@ function switchLanguage(lang) {
             btn.classList.remove('active');
         }
     });
-    
+
     document.querySelectorAll('[data-i18n]').forEach(el => {
         const key = el.getAttribute('data-i18n');
         if (translations[lang][key]) {
             el.textContent = translations[lang][key];
         }
     });
-    
+
     if (currentStation && currentData[currentStation]) {
         updateCurrentView(currentData[currentStation]);
     }
@@ -103,7 +105,7 @@ const INFLUX_CONFIG = isLocal ? {
     bucket: 'weather_data'
 };
 
-const MQTT_URL = isLocal 
+const MQTT_URL = isLocal
     ? 'ws://10.58.40.97:9001/mqtt'
     : `${isHTTPS ? 'wss:' : 'ws:'}//${window.location.host}/mqtt`;
 
@@ -197,11 +199,11 @@ function initMap() {
     stations.forEach((station, index) => {
         console.log(`  ${index + 1}. ${station.id} → [${station.lat}, ${station.lng}]`);
 
-        const color = station.type === 'lora' ? '#9C27B0' : 
-                     station.type === 'official' ? '#FF9800' : '#4CAF50';
+        const color = station.type === 'lora' ? '#9C27B0' :
+            station.type === 'official' ? '#FF9800' : '#4CAF50';
 
-        const typeText = station.type === 'lora' ? 'LoRa' : 
-                        station.type === 'official' ? 'Official' : 'Emulator';
+        const typeText = station.type === 'lora' ? 'LoRa' :
+            station.type === 'official' ? 'Official' : 'Emulator';
 
         const marker = L.marker([station.lat, station.lng])
             .bindPopup(`
@@ -239,7 +241,7 @@ function initMap() {
 
 // ========== MQTT ==========
 function initMQTT() {
-    
+
     mqttClient = mqtt.connect(MQTT_URL);  // Używa dynamicznego URL z góry
 
     const statusDot = document.getElementById('mqtt-status');
@@ -263,7 +265,7 @@ function initMQTT() {
     mqttClient.on('message', (topic, message) => {
         try {
             const data = JSON.parse(message.toString());
-            
+
             if (topic === 'weather/predictions') {
                 handlePredictionUpdate(data);
             } else {
@@ -279,7 +281,7 @@ function initMQTT() {
 function handlePredictionUpdate(data) {
     console.log('Received prediction:', data.station_id);
     predictionData[data.station_id] = data;
-    
+
     if (currentStation === data.station_id) {
         updatePredictionsView(data);
     }
@@ -289,14 +291,14 @@ function updatePredictionsView(data) {
     document.getElementById('loading-predictions').style.display = 'none';
     const container = document.getElementById('predictions-data');
     container.style.display = 'block';
-    
+
     const current = data.current;
     const predicted = data.predicted;
-    
+
     const tempChange = predicted.temperature - current.temperature;
     const pressureChange = predicted.pressure - current.pressure;
     const humidityChange = predicted.humidity - current.humidity;
-    
+
     container.innerHTML = `
         <h3 style="color: #667eea; margin-bottom: 10px;">ML Prediction (1 hour ahead)</h3>
         <p style="color: #718096; margin-bottom: 20px; font-size: 0.9em;">
@@ -391,7 +393,7 @@ function handleDataUpdate(data) {
         };
     } else {
         const cached = currentData[data.station_id];
-        
+
         currentData[data.station_id] = {
             ...cached,
             timestamp: data.timestamp,
@@ -420,20 +422,20 @@ function handleDataUpdate(data) {
 
 function updateStationLocation(data) {
     if (!data.lat || !data.lng) return;
-    
+
     const station = stations.find(s => s.id === data.station_id);
     if (!station) return;
-    
+
     const latChanged = Math.abs(station.lat - data.lat) > 0.0001;
     const lngChanged = Math.abs(station.lng - data.lng) > 0.0001;
-    
+
     if (latChanged || lngChanged) {
         console.log(`Location update ${data.station_id}: ${data.lat}, ${data.lng}`);
-        
+
         station.lat = data.lat;
         station.lng = data.lng;
         station.location = data.location || station.location;
-        
+
         if (markers[data.station_id]) {
             markers[data.station_id].setLatLng([data.lat, data.lng]);
         }
@@ -442,7 +444,7 @@ function updateStationLocation(data) {
 
 async function loadAllStationsFromInfluxDB() {
     console.log('Loading last data from all stations...');
-    
+
     for (const station of stations) {
         try {
             const lastData = await fetchLastReading(station.id);
@@ -471,7 +473,7 @@ async function loadAllStationsFromInfluxDB() {
             console.error(`  ✗ ${station.id}: ${error.message}`);
         }
     }
-    
+
     console.log('Loaded historical data');
 }
 
@@ -483,7 +485,7 @@ async function fetchLastReading(stationId) {
         |> filter(fn: (r) => r["station_id"] == "${stationId}")
         |> last()
     `;
-    
+
     try {
         const response = await fetch(`${INFLUX_CONFIG.url}/api/v2/query?org=${INFLUX_CONFIG.org}`, {
             method: 'POST',
@@ -520,17 +522,17 @@ function parseLastReadingCSV(csv) {
         battery_voltage: null,
         signal_strength: null
     };
-    
+
     let headerLine = null;
     let timeIdx = -1;
     let fieldIdx = -1;
     let valueIdx = -1;
-    
+
     for (let i = 0; i < lines.length; i++) {
         if (lines[i].includes('_time') && lines[i].includes('_field') && lines[i].includes('_value')) {
             headerLine = lines[i];
             const headers = headerLine.split(',');
-            
+
             for (let j = 0; j < headers.length; j++) {
                 if (headers[j] === '_time') timeIdx = j;
                 if (headers[j] === '_field') fieldIdx = j;
@@ -539,33 +541,33 @@ function parseLastReadingCSV(csv) {
             break;
         }
     }
-    
+
     if (timeIdx < 0 || fieldIdx < 0 || valueIdx < 0) {
         timeIdx = 5;
         fieldIdx = 7;
         valueIdx = 6;
     }
-    
+
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
-        
+
         if (line.startsWith('#') || line.trim() === '' || line.includes('_measurement')) continue;
-        
+
         const parts = line.split(',');
-        
+
         if (parts.length <= Math.max(timeIdx, fieldIdx, valueIdx)) continue;
-        
+
         const time = parts[timeIdx];
         const field = parts[fieldIdx];
         const valueStr = parts[valueIdx];
         const value = parseFloat(valueStr);
-        
+
         if (!field || isNaN(value)) continue;
-        
+
         if (!result.time && time) {
             result.time = time;
         }
-        
+
         if (field === 'temperature') result.temperature = value;
         else if (field === 'humidity') result.humidity = value;
         else if (field === 'pressure') result.pressure = value;
@@ -574,11 +576,11 @@ function parseLastReadingCSV(csv) {
         else if (field === 'battery_voltage') result.battery_voltage = value;
         else if (field === 'signal_strength') result.signal_strength = value;
     }
-    
+
     if (!result.time && result.temperature === null && result.humidity === null) {
         return null;
     }
-    
+
     return result;
 }
 
@@ -613,7 +615,7 @@ function switchTab(tabName) {
     if (tabName === 'charts' && currentStation) {
         loadAllCharts();
     }
-    
+
     if (tabName === 'predictions' && currentStation && predictionData[currentStation]) {
         updatePredictionsView(predictionData[currentStation]);
     }
@@ -758,6 +760,20 @@ function updateCurrentView(data) {
             </div>
         </div>
         
+        ${data.is_lora ? `
+        <div class="parameter-card">
+            <div class="parameter-header">
+                <div class="parameter-label">
+                    <span>${t('lux')}</span>
+                </div>
+            </div>
+            <div class="parameter-value">${data.lora_metadata && data.lora_metadata.lux !== undefined ? data.lora_metadata.lux + ' lux' : 'N/A'}</div>
+            <div class="parameter-time">
+                <div class="freshness-indicator ${freshness}"></div>
+                ${timeText}
+            </div>
+        </div>
+        ` : `
         <div class="parameter-card">
             <div class="parameter-header">
                 <div class="parameter-label">
@@ -770,6 +786,7 @@ function updateCurrentView(data) {
                 ${timeText}
             </div>
         </div>
+        `}
         
         <div class="system-info">
             <h3>${t('system_info')}</h3>
@@ -791,14 +808,14 @@ function updateCurrentView(data) {
             </div>
         </div>
     `;
-    
+
     if (data.is_lora && data.lora_metadata) {
         const meta = data.lora_metadata;
         let loraHtml = `
             <div class="system-info" style="margin-top: 20px;">
                 <h3>${t('lora_info')}</h3>
         `;
-        
+
         if (meta.cell1_voltage) {
             loraHtml += `
                 <div class="info-row">
@@ -815,7 +832,7 @@ function updateCurrentView(data) {
                 </div>
             `;
         }
-        
+
         if (meta.temp_bms) {
             loraHtml += `
                 <div class="info-row">
@@ -824,7 +841,7 @@ function updateCurrentView(data) {
                 </div>
             `;
         }
-        
+
         if (meta.temp_charger) {
             loraHtml += `
                 <div class="info-row">
@@ -833,7 +850,7 @@ function updateCurrentView(data) {
                 </div>
             `;
         }
-        
+
         if (meta.temp_bmp390) {
             loraHtml += `
                 <div class="info-row">
@@ -842,16 +859,15 @@ function updateCurrentView(data) {
                 </div>
             `;
         }
-        
-        if (meta.lux !== undefined) {
-            loraHtml += `
-                <div class="info-row">
-                    <span class="info-label">Lux:</span>
-                    <span class="info-value">${meta.lux}</span>
-                </div>
-            `;
-        }
-        
+
+        // Wind speed (moved from main panel for LoRa stations)
+        loraHtml += `
+            <div class="info-row">
+                <span class="info-label">${t('wind')}:</span>
+                <span class="info-value">${data.sensors.wind_speed !== null && data.sensors.wind_speed !== undefined ? data.sensors.wind_speed.toFixed(1) + ' m/s' : 'N/A'}</span>
+            </div>
+        `;
+
         if (meta.white_ratio) {
             loraHtml += `
                 <div class="info-row">
@@ -860,7 +876,7 @@ function updateCurrentView(data) {
                 </div>
             `;
         }
-        
+
         if (meta.snr !== undefined) {
             loraHtml += `
                 <div class="info-row">
@@ -869,7 +885,7 @@ function updateCurrentView(data) {
                 </div>
             `;
         }
-        
+
         loraHtml += `</div>`;
         container.innerHTML += loraHtml;
     }
@@ -1079,3 +1095,4 @@ function renderChart(chartType, labels, data, label, unit, colors) {
         }
     });
 }
+
